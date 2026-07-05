@@ -85,49 +85,38 @@ bot.use((ctx, next) => {
 async function askAI(userId, message) {
   const history = getHistory(userId);
 
-  // Construimos un prompt simple incluyendo el historial reciente
-  const contexto = history
-    .map(h => `${h.role === 'user' ? 'Usuario' : 'Asistente'}: ${h.text}`)
-    .join('\n');
-
-  const prompt = contexto
-    ? `${contexto}\nUsuario: ${message}\nAsistente:`
-    : message;
+  const messages = [
+    { role: 'system', content: 'Sos un asistente útil y breve dentro de un bot de Telegram.' },
+    ...history.map(h => ({
+      role: h.role === 'user' ? 'user' : 'assistant',
+      content: h.text
+    })),
+    { role: 'user', content: message }
+  ];
 
   try {
-    const res = await fetch(
-      'https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2',
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${process.env.HF_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          inputs: prompt,
-          options: { wait_for_model: true }
-        })
-      }
-    );
+    const res = await fetch('https://router.huggingface.co/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.HF_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'mistralai/Mistral-7B-Instruct-v0.2',
+        messages
+      })
+    });
 
     const data = await res.json();
-    console.log('IA RAW:', data);
+    console.log('IA RAW:', JSON.stringify(data));
 
     if (!res.ok) {
-      return `🤖 Error IA (${res.status}): ${data?.error || 'sin detalle'}`;
+      return `🤖 Error IA (${res.status}): ${data?.error?.message || data?.error || 'sin detalle'}`;
     }
 
-    if (Array.isArray(data) && data[0]?.generated_text) {
-      return data[0].generated_text;
-    }
+    const reply = data?.choices?.[0]?.message?.content;
 
-    if (data?.generated_text) {
-      return data.generated_text;
-    }
-
-    if (data?.error) {
-      return '🤖 Error IA: ' + data.error;
-    }
+    if (reply) return reply;
 
     return '🤖 IA sin respuesta válida.';
   } catch (err) {
