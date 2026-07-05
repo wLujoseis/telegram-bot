@@ -1,15 +1,108 @@
 const { Telegraf } = require('telegraf');
+const express = require('express');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
+const app = express();
+
+/* ---------------- DB EN MEMORIA (ESTABLE) ---------------- */
+
+let db = {
+  reminders: [],
+  chats: {}
+};
+
+/* ---------------- MEMORIA ---------------- */
+
+function getHistory(userId) {
+  if (!db.chats[userId]) db.chats[userId] = [];
+  return db.chats[userId];
+}
+
+function addHistory(userId, role, text) {
+  const h = getHistory(userId);
+
+  h.push({ role, text });
+
+  if (h.length > 10) h.shift();
+}
+
+/* ---------------- IA SEGURA ---------------- */
+
+async function askAI(message) {
+  try {
+    const res = await fetch(
+      "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.HF_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          inputs: message
+        })
+      }
+    );
+
+    const data = await res.json();
+
+    if (Array.isArray(data) && data[0]?.generated_text) {
+      return data[0].generated_text;
+    }
+
+    return "🤖 No tengo respuesta ahora.";
+
+  } catch (err) {
+    console.log("IA ERROR:", err.message);
+    return "🤖 IA no disponible en este momento.";
+  }
+}
+
+/* ---------------- BOT ---------------- */
 
 bot.start((ctx) => {
-  ctx.reply("🟢 BOT FUNCIONANDO");
+  ctx.reply("🤖 Bot activo correctamente");
 });
 
-bot.on('text', (ctx) => {
-  ctx.reply("📩 OK: " + ctx.message.text);
+bot.on('text', async (ctx) => {
+  const text = ctx.message.text;
+  const userId = ctx.from.id;
+
+  if (text.startsWith('/')) return;
+
+  addHistory(userId, "user", text);
+
+  await ctx.sendChatAction("typing");
+
+  const reply = await askAI(text);
+
+  addHistory(userId, "assistant", reply);
+
+  ctx.reply(reply);
 });
 
-bot.launch({ dropPendingUpdates: true });
+/* ---------------- RECORDATORIOS ---------------- */
 
-console.log("BOT INICIADO");
+bot.command('recordar', (ctx) => {
+  const text = ctx.message.text.replace('/recordar', '').trim();
+  const match = text.match(/^(\d+)(m|h)\s(.+)$/);
+
+  if (!match) {
+    return ctx.reply("❌ Usa: /recordar 10m mensaje");
+  }
+
+  const ms = match[2] === 'm'
+    ? match[1] * 60000
+    : match[1] * 3600000;
+
+  db.reminders.push({
+    user: ctx.from.id,
+    message: match[3],
+    time: Date.now() + ms
+  });
+
+  ctx.reply("⏰ Recordatorio creado");
+});
+
+bot.command('listar', (ctx) => {
+  const list = db.reminders.filter(r => r.user === ctx.from
