@@ -131,7 +131,7 @@ async function askAI(userId, message) {
 
     return '🤖 IA sin respuesta válida.';
   } catch (err) {
-    console.log('IA ERROR:', err.message);
+    console.log('IA ERROR:', err.message, '| CAUSA:', err.cause);
     return '🤖 IA caída temporalmente.';
   }
 }
