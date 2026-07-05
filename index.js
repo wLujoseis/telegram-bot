@@ -7,27 +7,20 @@ const app = express();
 
 /* ---------------- CONFIG ---------------- */
 
-// 🔒 TU ID
 const allowedUsers = [1335034075];
 
-// 📁 DB
 const DB_FILE = './db.json';
 
-let db = {
-  reminders: [],
-  messages: []
-};
+let db = { reminders: [] };
 
-// cargar DB si existe
 if (fs.existsSync(DB_FILE)) {
   try {
     db = JSON.parse(fs.readFileSync(DB_FILE));
   } catch (e) {
-    console.log("Error leyendo DB, reiniciando...");
+    db = { reminders: [] };
   }
 }
 
-// guardar DB
 function saveDB() {
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 }
@@ -42,18 +35,26 @@ bot.use((ctx, next) => {
   return next();
 });
 
-/* ---------------- COMANDOS ---------------- */
+/* ---------------- START ---------------- */
 
 bot.start((ctx) => {
-  ctx.reply("🤖 Asistente activo\nUsa /ayuda");
+  ctx.reply("🤖 Asistente activo\nEscribe lo que quieras o usa /ayuda");
 });
+
+/* ---------------- COMANDOS ---------------- */
 
 bot.command('ayuda', (ctx) => {
   ctx.reply(`
-📌 Comandos:
+📌 COMANDOS:
 /recordar 10m mensaje
-/recordar 1h mensaje
+/listar
+/borrar
+/info
   `);
+});
+
+bot.command('info', (ctx) => {
+  ctx.reply("🤖 Soy tu asistente inteligente con memoria y recordatorios.");
 });
 
 /* ---------------- RECORDATORIOS ---------------- */
@@ -64,16 +65,14 @@ bot.command('recordar', (ctx) => {
   const match = text.match(/^(\d+)(m|h)\s(.+)$/);
 
   if (!match) {
-    return ctx.reply("❌ Usa: /recordar 10m tomar agua");
+    return ctx.reply("❌ Usa: 10m tomar agua");
   }
 
   const value = parseInt(match[1]);
   const type = match[2];
   const message = match[3];
 
-  let ms = 0;
-  if (type === 'm') ms = value * 60000;
-  if (type === 'h') ms = value * 3600000;
+  let ms = type === 'm' ? value * 60000 : value * 3600000;
 
   db.reminders.push({
     user: ctx.from.id,
@@ -83,50 +82,78 @@ bot.command('recordar', (ctx) => {
 
   saveDB();
 
-  ctx.reply(`⏰ Recordatorio creado: ${message}`);
+  ctx.reply(`⏰ Listo, lo recordaré`);
 });
 
-/* ---------------- MENSAJES (SIN BUG "RECIBIDO") ---------------- */
+/* ---------------- LISTAR ---------------- */
 
-bot.on('text', (ctx) => {
-  const text = ctx.message.text;
+bot.command('listar', (ctx) => {
+  const list = db.reminders.filter(r => r.user === ctx.from.id);
 
-  // 🔥 evitar comandos
-  if (text.startsWith('/')) return;
+  if (list.length === 0) {
+    return ctx.reply("No tienes recordatorios.");
+  }
 
-  const lower = text.toLowerCase();
-
-  db.messages.push({
-    user: ctx.from.id,
-    text,
-    date: new Date()
+  let msg = "📋 Recordatorios:\n\n";
+  list.forEach((r, i) => {
+    msg += `${i + 1}. ${r.message}\n`;
   });
 
-  saveDB();
-
-  if (lower.includes('hola')) {
-    return ctx.reply("👋 Hola, soy tu asistente.");
-  }
-
-  if (lower.includes('quién eres')) {
-    return ctx.reply("🤖 Soy tu asistente personal.");
-  }
-
-  if (lower.includes('ayuda')) {
-    return ctx.reply("Escribe /ayuda para ver comandos.");
-  }
-
-  ctx.reply("🤖 No entendí eso, usa /ayuda");
+  ctx.reply(msg);
 });
 
-/* ---------------- RECORDATORIOS AUTOMÁTICOS ---------------- */
+/* ---------------- BORRAR ---------------- */
+
+bot.command('borrar', (ctx) => {
+  db.reminders = db.reminders.filter(r => r.user !== ctx.from.id);
+  saveDB();
+  ctx.reply("🗑️ Eliminados");
+});
+
+/* ---------------- 🤖 MODO INTELIGENTE SIN COMANDOS ---------------- */
+
+bot.on('text', (ctx) => {
+  const text = ctx.message.text.toLowerCase();
+
+  // ❌ evitar comandos
+  if (text.startsWith('/')) return;
+
+  // 💾 guardar en memoria básica
+  if (text.includes('recordar')) {
+    db.reminders.push({
+      user: ctx.from.id,
+      message: text.replace('recordar', '').trim(),
+      time: Date.now() + 60000 // 1 min por defecto
+    });
+
+    saveDB();
+
+    return ctx.reply("⏰ Ok, lo recordaré");
+  }
+
+  if (text.includes('hola')) {
+    return ctx.reply("👋 Hola, dime qué necesitas");
+  }
+
+  if (text.includes('qué puedes hacer')) {
+    return ctx.reply("Puedo responderte, recordar cosas y ayudarte.");
+  }
+
+  if (text.includes('hora')) {
+    return ctx.reply(`⏰ ${new Date().toLocaleTimeString()}`);
+  }
+
+  ctx.reply("🤖 No estoy seguro, pero puedo ayudarte. Escribe /ayuda");
+});
+
+/* ---------------- RECORDATORIOS ---------------- */
 
 setInterval(() => {
   const now = Date.now();
 
   db.reminders = db.reminders.filter(r => {
     if (now >= r.time) {
-      bot.telegram.sendMessage(r.user, `🔔 Recordatorio: ${r.message}`);
+      bot.telegram.sendMessage(r.user, `🔔 ${r.message}`);
       return false;
     }
     return true;
@@ -135,29 +162,16 @@ setInterval(() => {
   saveDB();
 }, 5000);
 
-/* ---------------- PANEL WEB ---------------- */
+/* ---------------- WEB PANEL ---------------- */
 
 app.get('/', (req, res) => {
   res.send(`
-    <h1>🤖 Panel del Asistente</h1>
-    <p>Mensajes: ${db.messages.length}</p>
+    <h1>🤖 Asistente activo</h1>
     <p>Recordatorios: ${db.reminders.length}</p>
   `);
 });
 
-app.get('/messages', (req, res) => {
-  res.json(db.messages);
-});
-
-app.get('/reminders', (req, res) => {
-  res.json(db.reminders);
-});
-
-/* ---------------- START ---------------- */
-
-app.listen(process.env.PORT || 3000, () => {
-  console.log("🌐 Panel web activo");
-});
+app.listen(process.env.PORT || 3000);
 
 bot.launch();
-console.log("🤖 Bot activo correctamente");
+console.log("🤖 Asistente inteligente activo");
