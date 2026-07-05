@@ -28,7 +28,7 @@ function addHistory(userId, role, text) {
 
 /* ---------------- IA SEGURA ---------------- */
 
-async function askAI(message) {
+ async function askAI(message) {
   try {
     const res = await fetch(
       "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
@@ -39,12 +39,15 @@ async function askAI(message) {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          inputs: message
+          inputs: message,
+          options: { wait_for_model: true }
         })
       }
     );
 
     const data = await res.json();
+
+    console.log("IA RAW:", data); // 👈 IMPORTANTE para debug
 
     if (Array.isArray(data) && data[0]?.generated_text) {
       return data[0].generated_text;
@@ -54,11 +57,15 @@ async function askAI(message) {
       return data.generated_text;
     }
 
-    return "🤖 No tengo respuesta ahora.";
+    if (data?.error) {
+      return "🤖 Error IA: " + data.error;
+    }
+
+    return "🤖 IA sin respuesta válida.";
 
   } catch (err) {
     console.log("IA ERROR:", err.message);
-    return "🤖 IA no disponible.";
+    return "🤖 IA caída temporalmente.";
   }
 }
 
