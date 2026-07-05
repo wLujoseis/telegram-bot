@@ -2,32 +2,105 @@ const { Telegraf } = require('telegraf');
 const express = require('express');
 const fs = require('fs');
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
-const app = express();
+// si tu Node no tiene fetch:
+const fetch = (...args) =>
+  import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
 /* ---------------- CONFIG ---------------- */
 
-const allowedUsers = [1335034075];
+const bot = new Telegraf(process.env.BOT_TOKEN);
+const app = express();
 
+const allowedUsers = [1335034075];
 const DB_FILE = './db.json';
 
 let db = {
   reminders: [],
-  messages: []
+  messages: [],
+  chats: {}
 };
 
-// cargar DB si existe
+/* ---------------- DB ---------------- */
+
 if (fs.existsSync(DB_FILE)) {
   try {
-    db = JSON.parse(fs.readFileSync(DB_FILE));
+    db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
   } catch (e) {
     console.log("⚠️ DB corrupta, reiniciando...");
   }
 }
 
-// guardar DB
 function saveDB() {
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+}
+
+/* ---------------- MEMORIA PRO ---------------- */
+
+function getHistory(userId) {
+  if (!db.chats[userId]) db.chats[userId] = [];
+  return db.chats[userId];
+}
+
+function addHistory(userId, role, text) {
+  const history = getHistory(userId);
+
+  history.push({ role, text });
+
+  if (history.length > 12) history.shift();
+
+  saveDB();
+}
+
+/* ---------------- IA PRO ---------------- */
+
+const HUGGINGFACE_API_KEY = process.env.HF_TOKEN;
+
+async function askAI(userId, message) {
+  const history = getHistory(userId);
+
+  let prompt = "Eres un asistente inteligente, útil y conversacional.\n";
+
+  history.forEach(h => {
+    prompt += `${h.role === "user" ? "Usuario" : "Asistente"}: ${h.text}\n`;
+  });
+
+  prompt += `Usuario: ${message}\nAsistente:`;
+
+  try {
+    const res = await fetch(
+      "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${HUGGINGFACE_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          inputs: prompt,
+          parameters: {
+            max_new_tokens: 180,
+            temperature: 0.7
+          }
+        })
+      }
+    );
+
+    const data = await res.json();
+
+    const output =
+      data?.[0]?.generated_text ||
+      data?.generated_text;
+
+    if (output) {
+      return output.split("Asistente:").pop().trim();
+    }
+
+    throw new Error("Sin respuesta");
+
+  } catch (err) {
+    console.log("IA error:", err.message);
+    return "🤖 No pude pensar ahora mismo, intenta de nuevo.";
+  }
 }
 
 /* ---------------- SEGURIDAD ---------------- */
@@ -40,44 +113,38 @@ bot.use((ctx, next) => {
   return next();
 });
 
-/* ---------------- BOT ---------------- */
+/* ---------------- BOT IA ---------------- */
 
-bot.start((ctx) => {
-  ctx.reply("🤖 Asistente activo\nUsa /ayuda");
-});
+bot.on('text', async (ctx) => {
+  const text = ctx.message.text;
+  const userId = ctx.from.id;
 
-bot.command('ayuda', (ctx) => {
-  ctx.reply(`
-📌 COMANDOS:
+  if (text.startsWith('/')) return;
 
-/recordar 10m mensaje
-/recordar 1h mensaje
-/listar
-/borrar
-/info
-  `);
-});
+  addHistory(userId, "user", text);
 
-bot.command('info', (ctx) => {
-  ctx.reply("🤖 Asistente personal con recordatorios y panel web.");
+  await ctx.sendChatAction("typing");
+
+  const reply = await askAI(userId, text);
+
+  addHistory(userId, "assistant", reply);
+
+  ctx.reply(reply);
 });
 
 /* ---------------- RECORDATORIOS ---------------- */
 
 bot.command('recordar', (ctx) => {
   const text = ctx.message.text.replace('/recordar', '').trim();
-
   const match = text.match(/^(\d+)(m|h)\s(.+)$/);
 
-  if (!match) {
-    return ctx.reply("❌ Usa: /recordar 10m tomar agua");
-  }
+  if (!match) return ctx.reply("❌ Usa: /recordar 10m tomar agua");
 
   const value = parseInt(match[1]);
   const type = match[2];
   const message = match[3];
 
-  let ms = type === 'm' ? value * 60000 : value * 3600000;
+  const ms = type === 'm' ? value * 60000 : value * 3600000;
 
   db.reminders.push({
     user: ctx.from.id,
@@ -87,76 +154,31 @@ bot.command('recordar', (ctx) => {
 
   saveDB();
 
-  ctx.reply(`⏰ Recordatorio creado: ${message}`);
+  ctx.reply("⏰ Recordatorio creado");
 });
-
-/* ---------------- LISTAR ---------------- */
 
 bot.command('listar', (ctx) => {
   const list = db.reminders.filter(r => r.user === ctx.from.id);
 
-  if (list.length === 0) {
-    return ctx.reply("No tienes recordatorios.");
-  }
+  if (!list.length) return ctx.reply("No tienes recordatorios");
 
-  let msg = "📋 Tus recordatorios:\n\n";
-
-  list.forEach((r, i) => {
-    msg += `${i + 1}. ${r.message}\n`;
-  });
-
-  ctx.reply(msg);
+  ctx.reply(list.map((r, i) => `${i + 1}. ${r.message}`).join("\n"));
 });
-
-/* ---------------- BORRAR ---------------- */
 
 bot.command('borrar', (ctx) => {
   db.reminders = db.reminders.filter(r => r.user !== ctx.from.id);
   saveDB();
-
-  ctx.reply("🗑️ Recordatorios eliminados");
+  ctx.reply("🗑️ Eliminados");
 });
 
-/* ---------------- MENSAJES SIN RUIDO ---------------- */
-
-bot.on('text', (ctx) => {
-  const text = ctx.message.text;
-
-  if (text.startsWith('/')) return;
-
-  const lower = text.toLowerCase();
-
-  db.messages.push({
-    user: ctx.from.id,
-    text,
-    date: new Date()
-  });
-
-  saveDB();
-
-  if (lower.includes('hola')) {
-    return ctx.reply("👋 Hola, soy tu asistente.");
-  }
-
-  if (lower.includes('qué hora')) {
-    return ctx.reply(`⏰ ${new Date().toLocaleTimeString()}`);
-  }
-
-  if (lower.includes('qué puedes hacer')) {
-    return ctx.reply("Puedo ayudarte, recordar cosas y responderte.");
-  }
-
-  ctx.reply("🤖 Usa /ayuda para ver comandos");
-});
-
-/* ---------------- RECORDATORIOS AUTOMÁTICOS ---------------- */
+/* ---------------- LOOP RECORDATORIOS ---------------- */
 
 setInterval(() => {
   const now = Date.now();
 
   db.reminders = db.reminders.filter(r => {
     if (now >= r.time) {
-      bot.telegram.sendMessage(r.user, `🔔 Recordatorio: ${r.message}`);
+      bot.telegram.sendMessage(r.user, `🔔 ${r.message}`);
       return false;
     }
     return true;
@@ -169,30 +191,23 @@ setInterval(() => {
 
 app.get('/', (req, res) => {
   res.send(`
-    <h1>🤖 Panel del Bot</h1>
-    <p>📨 Mensajes: ${db.messages.length}</p>
-    <p>⏰ Recordatorios: ${db.reminders.length}</p>
-
-    <hr>
-
-    <p><a href="/messages">Ver mensajes</a></p>
-    <p><a href="/reminders">Ver recordatorios</a></p>
+    <h1>🤖 Bot PRO</h1>
+    <p>Mensajes: ${db.messages.length}</p>
+    <p>Recordatorios: ${db.reminders.length}</p>
   `);
 });
 
-app.get('/messages', (req, res) => {
-  res.json(db.messages || []);
-});
-
-app.get('/reminders', (req, res) => {
-  res.json(db.reminders || []);
-});
+app.get('/messages', (req, res) => res.json(db.messages));
+app.get('/reminders', (req, res) => res.json(db.reminders));
 
 /* ---------------- START ---------------- */
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🌐 Panel web activo");
+  console.log("🌐 Web activa");
 });
 
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
 bot.launch();
-console.log("🤖 Bot activo correctamente");
+console.log("🤖 Bot PRO activo");
