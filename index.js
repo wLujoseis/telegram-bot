@@ -7,20 +7,23 @@ const app = express();
 
 /* ---------------- CONFIG ---------------- */
 
-// 🔒 TU ID (ya actualizado)
+// 🔒 TU ID
 const allowedUsers = [1335034075];
 
-// 📁 base de datos
+// 📁 DB
 const DB_FILE = './db.json';
 
-let db = { reminders: [], messages: [] };
+let db = {
+  reminders: [],
+  messages: []
+};
 
 // cargar DB si existe
 if (fs.existsSync(DB_FILE)) {
   try {
     db = JSON.parse(fs.readFileSync(DB_FILE));
   } catch (e) {
-    console.log("Error leyendo DB, creando nueva...");
+    console.log("Error leyendo DB, reiniciando...");
   }
 }
 
@@ -39,10 +42,10 @@ bot.use((ctx, next) => {
   return next();
 });
 
-/* ---------------- BOT ---------------- */
+/* ---------------- COMANDOS ---------------- */
 
 bot.start((ctx) => {
-  ctx.reply("🤖 Asistente activo listo.");
+  ctx.reply("🤖 Asistente activo\nUsa /ayuda");
 });
 
 bot.command('ayuda', (ctx) => {
@@ -72,44 +75,48 @@ bot.command('recordar', (ctx) => {
   if (type === 'm') ms = value * 60000;
   if (type === 'h') ms = value * 3600000;
 
-  const reminder = {
+  db.reminders.push({
     user: ctx.from.id,
     message,
     time: Date.now() + ms
-  };
+  });
 
-  db.reminders.push(reminder);
   saveDB();
 
   ctx.reply(`⏰ Recordatorio creado: ${message}`);
 });
 
-/* ---------------- CHAT SIMPLE ---------------- */
+/* ---------------- MENSAJES (SIN BUG "RECIBIDO") ---------------- */
 
 bot.on('text', (ctx) => {
-  const text = ctx.message.text.toLowerCase();
+  const text = ctx.message.text;
+
+  // 🔥 evitar comandos
+  if (text.startsWith('/')) return;
+
+  const lower = text.toLowerCase();
 
   db.messages.push({
     user: ctx.from.id,
-    text: ctx.message.text,
+    text,
     date: new Date()
   });
 
   saveDB();
 
-  if (text.includes('hola')) {
+  if (lower.includes('hola')) {
     return ctx.reply("👋 Hola, soy tu asistente.");
   }
 
-  if (text.includes('quién eres')) {
+  if (lower.includes('quién eres')) {
     return ctx.reply("🤖 Soy tu asistente personal.");
   }
 
-  if (text.includes('ayuda')) {
+  if (lower.includes('ayuda')) {
     return ctx.reply("Escribe /ayuda para ver comandos.");
   }
 
-  ctx.reply("🤖 Recibido");
+  ctx.reply("🤖 No entendí eso, usa /ayuda");
 });
 
 /* ---------------- RECORDATORIOS AUTOMÁTICOS ---------------- */
@@ -153,4 +160,4 @@ app.listen(process.env.PORT || 3000, () => {
 });
 
 bot.launch();
-console.log("🤖 Bot actualizado y activo");
+console.log("🤖 Bot activo correctamente");
