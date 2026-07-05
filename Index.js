@@ -14,4 +14,4 @@ bot.on('text', (ctx) => {
 
 bot.launch();
 
-console.log("Bot activo...");
+console.log("Bot activo");
