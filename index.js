@@ -5,8 +5,6 @@ const fs = require('fs');
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const app = express();
 
-let db = { messages: [], reminders: [] };
-
 /* ---------------- CONFIG ---------------- */
 
 const allowedUsers = [1335034075];
