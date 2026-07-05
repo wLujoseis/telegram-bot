@@ -2,16 +2,11 @@ const { Telegraf } = require('telegraf');
 const express = require('express');
 const fs = require('fs');
 
-// si tu Node no tiene fetch:
-const fetch = (...args) =>
-  import('node-fetch').then(({ default: fetch }) => fetch(...args));
-
-/* ---------------- CONFIG ---------------- */
-
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const app = express();
 
-const allowedUsers = [1335034075];
+/* ---------------- DB ---------------- */
+
 const DB_FILE = './db.json';
 
 let db = {
@@ -20,21 +15,23 @@ let db = {
   chats: {}
 };
 
-/* ---------------- DB ---------------- */
-
 if (fs.existsSync(DB_FILE)) {
   try {
     db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
   } catch (e) {
-    console.log("⚠️ DB corrupta, reiniciando...");
+    console.log("⚠️ DB reiniciada");
   }
 }
 
 function saveDB() {
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+  } catch (e) {
+    console.log("⚠️ Error guardando DB");
+  }
 }
 
-/* ---------------- MEMORIA PRO ---------------- */
+/* ---------------- MEMORIA ---------------- */
 
 function getHistory(userId) {
   if (!db.chats[userId]) db.chats[userId] = [];
@@ -42,78 +39,68 @@ function getHistory(userId) {
 }
 
 function addHistory(userId, role, text) {
-  const history = getHistory(userId);
-
-  history.push({ role, text });
-
-  if (history.length > 12) history.shift();
-
+  const h = getHistory(userId);
+  h.push({ role, text });
+  if (h.length > 10) h.shift();
   saveDB();
 }
 
-/* ---------------- IA PRO ---------------- */
-
-const HUGGINGFACE_API_KEY = process.env.HF_TOKEN;
+/* ---------------- IA SEGURA ---------------- */
 
 async function askAI(userId, message) {
-  const history = getHistory(userId);
-
-  let prompt = "Eres un asistente inteligente, útil y conversacional.\n";
-
-  history.forEach(h => {
-    prompt += `${h.role === "user" ? "Usuario" : "Asistente"}: ${h.text}\n`;
-  });
-
-  prompt += `Usuario: ${message}\nAsistente:`;
-
   try {
+    const history = getHistory(userId);
+
+    let prompt = "";
+
+    history.forEach(h => {
+      prompt += `${h.role === "user" ? "Usuario" : "Asistente"}: ${h.text}\n`;
+    });
+
+    prompt += `Usuario: ${message}\nAsistente:`;
+
     const res = await fetch(
       "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
       {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${HUGGINGFACE_API_KEY}`,
+          "Authorization": `Bearer ${process.env.HF_TOKEN}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          inputs: prompt,
-          parameters: {
-            max_new_tokens: 180,
-            temperature: 0.7
-          }
+          inputs: prompt
         })
       }
     );
 
     const data = await res.json();
 
-    const output =
-      data?.[0]?.generated_text ||
-      data?.generated_text;
+    let output = "";
 
-    if (output) {
-      return output.split("Asistente:").pop().trim();
+    if (Array.isArray(data)) {
+      output = data[0]?.generated_text;
+    } else {
+      output = data?.generated_text;
     }
 
-    throw new Error("Sin respuesta");
+    if (!output) {
+      console.log("IA RAW:", data);
+      return "🤖 No pude generar respuesta ahora.";
+    }
+
+    return output;
 
   } catch (err) {
-    console.log("IA error:", err.message);
-    return "🤖 No pude pensar ahora mismo, intenta de nuevo.";
+    console.log("IA ERROR:", err.message);
+    return "🤖 IA no disponible ahora, intenta otra vez.";
   }
 }
 
-/* ---------------- SEGURIDAD ---------------- */
+/* ---------------- BOT ---------------- */
 
-bot.use((ctx, next) => {
-  if (!ctx.from) return;
-  if (!allowedUsers.includes(ctx.from.id)) {
-    return ctx.reply("❌ No autorizado");
-  }
-  return next();
+bot.start((ctx) => {
+  ctx.reply("🤖 Bot activo y funcionando");
 });
-
-/* ---------------- BOT IA ---------------- */
 
 bot.on('text', async (ctx) => {
   const text = ctx.message.text;
@@ -138,37 +125,21 @@ bot.command('recordar', (ctx) => {
   const text = ctx.message.text.replace('/recordar', '').trim();
   const match = text.match(/^(\d+)(m|h)\s(.+)$/);
 
-  if (!match) return ctx.reply("❌ Usa: /recordar 10m tomar agua");
+  if (!match) return ctx.reply("❌ Usa: /recordar 10m mensaje");
 
-  const value = parseInt(match[1]);
-  const type = match[2];
-  const message = match[3];
-
-  const ms = type === 'm' ? value * 60000 : value * 3600000;
+  const ms = match[2] === 'm'
+    ? match[1] * 60000
+    : match[1] * 3600000;
 
   db.reminders.push({
     user: ctx.from.id,
-    message,
+    message: match[3],
     time: Date.now() + ms
   });
 
   saveDB();
 
   ctx.reply("⏰ Recordatorio creado");
-});
-
-bot.command('listar', (ctx) => {
-  const list = db.reminders.filter(r => r.user === ctx.from.id);
-
-  if (!list.length) return ctx.reply("No tienes recordatorios");
-
-  ctx.reply(list.map((r, i) => `${i + 1}. ${r.message}`).join("\n"));
-});
-
-bot.command('borrar', (ctx) => {
-  db.reminders = db.reminders.filter(r => r.user !== ctx.from.id);
-  saveDB();
-  ctx.reply("🗑️ Eliminados");
 });
 
 /* ---------------- LOOP RECORDATORIOS ---------------- */
@@ -187,27 +158,21 @@ setInterval(() => {
   saveDB();
 }, 5000);
 
-/* ---------------- PANEL WEB ---------------- */
+/* ---------------- WEB ---------------- */
 
 app.get('/', (req, res) => {
-  res.send(`
-    <h1>🤖 Bot PRO</h1>
-    <p>Mensajes: ${db.messages.length}</p>
-    <p>Recordatorios: ${db.reminders.length}</p>
-  `);
+  res.send("🤖 Bot funcionando");
 });
-
-app.get('/messages', (req, res) => res.json(db.messages));
-app.get('/reminders', (req, res) => res.json(db.reminders));
-
-/* ---------------- START ---------------- */
 
 app.listen(process.env.PORT || 3000, () => {
   console.log("🌐 Web activa");
 });
 
+/* ---------------- START SEGURO ---------------- */
+
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
-bot.launch();
-console.log("🤖 Bot PRO activo");
+bot.launch({ dropPendingUpdates: true });
+
+console.log("🤖 BOT PRO ESTABLE ACTIVO");
