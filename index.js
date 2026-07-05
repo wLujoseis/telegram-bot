@@ -27,10 +27,15 @@ let db = { reminders: [], chats: {} };
 function loadDB() {
   try {
     if (fs.existsSync(DB_FILE)) {
-      db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      const loaded = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      db = {
+        reminders: Array.isArray(loaded.reminders) ? loaded.reminders : [],
+        chats: loaded.chats && typeof loaded.chats === 'object' ? loaded.chats : {}
+      };
     }
   } catch (err) {
     console.log('No se pudo cargar db.json, se usa una nueva:', err.message);
+    db = { reminders: [], chats: {} };
   }
 }
 
