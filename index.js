@@ -4,7 +4,7 @@ const express = require('express');
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const app = express();
 
-/* ---------------- DB EN MEMORIA (ESTABLE) ---------------- */
+/* ---------------- DB ---------------- */
 
 let db = {
   reminders: [],
@@ -50,11 +50,15 @@ async function askAI(message) {
       return data[0].generated_text;
     }
 
+    if (data?.generated_text) {
+      return data.generated_text;
+    }
+
     return "🤖 No tengo respuesta ahora.";
 
   } catch (err) {
     console.log("IA ERROR:", err.message);
-    return "🤖 IA no disponible en este momento.";
+    return "🤖 IA no disponible.";
   }
 }
 
@@ -105,4 +109,49 @@ bot.command('recordar', (ctx) => {
 });
 
 bot.command('listar', (ctx) => {
-  const list = db.reminders.filter(r => r.user === ctx.from
+  const list = db.reminders.filter(r => r.user === ctx.from.id);
+
+  if (!list.length) {
+    return ctx.reply("No tienes recordatorios");
+  }
+
+  ctx.reply(list.map((r, i) => `${i + 1}. ${r.message}`).join("\n"));
+});
+
+bot.command('borrar', (ctx) => {
+  db.reminders = db.reminders.filter(r => r.user !== ctx.from.id);
+  ctx.reply("🗑️ Eliminados");
+});
+
+/* ---------------- LOOP RECORDATORIOS ---------------- */
+
+setInterval(() => {
+  const now = Date.now();
+
+  db.reminders = db.reminders.filter(r => {
+    if (now >= r.time) {
+      bot.telegram.sendMessage(r.user, `🔔 ${r.message}`);
+      return false;
+    }
+    return true;
+  });
+}, 5000);
+
+/* ---------------- WEB ---------------- */
+
+app.get('/', (req, res) => {
+  res.send("🤖 Bot funcionando correctamente");
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log("🌐 Web activa");
+});
+
+/* ---------------- START ---------------- */
+
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
+bot.launch({ dropPendingUpdates: true });
+
+console.log("🤖 BOT PRO ACTIVO");
